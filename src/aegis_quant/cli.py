@@ -18,7 +18,7 @@ def _print_output(payload: dict[str, Any], as_json: bool) -> None:
         print(json.dumps(payload, indent=2))
         return
 
-    if "primary_verdict" in payload:
+    if "primary_verdict" in payload and "buckets" in payload:
         print("=" * 84)
         print(f"AEGIS QUANT // CROSS-ASSET ALLOCATION VERDICT ({payload['regime']})")
         print("=" * 84)
@@ -241,6 +241,8 @@ def main(argv: list[str] | None = None) -> int:
             prefer_live_feeds=args.live_feeds,
             route_to_trading212=True,
         )
+        assert engine.latest_advice is not None
+        pie_plan = engine.t212_client.build_pie_allocation_payload(engine.latest_advice)
         _print_output(
             {
                 "trading212_environment": engine.t212_client.environment.value,
@@ -250,6 +252,7 @@ def main(argv: list[str] | None = None) -> int:
                 "detected_regime": res["detected_regime"],
                 "primary_verdict": res["allocation_advice"]["primary_verdict"],
                 "trading212_order_receipts": res["trading212_receipts"],
+                "trading212_autoinvest_pie_payload": pie_plan,
                 "portfolio": res["portfolio"],
             },
             as_json=args.json,

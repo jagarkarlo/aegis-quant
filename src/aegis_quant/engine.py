@@ -126,6 +126,22 @@ class AutonomousQuantEngine:
         opened_positions = []
         t212_receipts: list[ExternalOrderReceipt] = []
 
+        t212_free_cash: float | None = None
+        t212_total_eq: float | None = None
+        t212_open_map: dict[str, float] = {}
+        if route_to_trading212 and self.t212_client.is_configured():
+            try:
+                self.t212_client.refresh_tradable_catalog()
+                cash_info = self.t212_client.get_account_cash()
+                t212_free_cash = float(cash_info.get("free", 0.0))
+                t212_total_eq = float(cash_info.get("total", t212_free_cash))
+                for p_item in self.t212_client.get_open_positions():
+                    tk = str(p_item.get("ticker", ""))
+                    if tk:
+                        t212_open_map[tk] = float(p_item.get("quantity", 0.0))
+            except Exception:
+                pass
+
         for sig in advice.actionable_signals[:3]:
             bar = bars[sig.symbol]
             open_pos = self.storage.list_positions()
@@ -157,9 +173,14 @@ class AutonomousQuantEngine:
                         signal=sig,
                         decision=decision,
                         reference_price=bar.mid_price,
+                        account_free_cash=t212_free_cash,
+                        account_total_equity=t212_total_eq,
+                        open_t212_positions=t212_open_map,
                         dry_run_if_unconfigured=True,
                     )
                     t212_receipts.append(receipt)
+                    if t212_free_cash is not None and receipt.notional_account_ccy > 0:
+                        t212_free_cash = max(0.0, t212_free_cash - receipt.notional_account_ccy)
 
         self.latest_decisions = decisions
         self.latest_t212_receipts = t212_receipts

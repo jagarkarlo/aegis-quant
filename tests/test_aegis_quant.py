@@ -274,7 +274,39 @@ class TestAegisQuant(unittest.TestCase):
         self.assertGreater(len(res["trading212_receipts"]), 0)
         first_receipt = res["trading212_receipts"][0]
         self.assertEqual(first_receipt["status"], "DRY_RUN_READY")
-        self.assertTrue(first_receipt["broker_ticker"].endswith("_US_EQ"))
+        self.assertTrue(first_receipt["broker_ticker"].endswith("_EQ"))
+
+        # Verify EU/UK UCITS & Crypto/FX proxy resolution so all asset classes are accepted by T212 Invest
+        btc_ticker, btc_note = engine.t212_client.resolve_ticker_for_symbol("BTC/USD")
+        self.assertEqual(btc_ticker, "MSTR_US_EQ")
+        self.assertIn("Crypto signal", btc_note)
+
+        fx_ticker, fx_note = engine.t212_client.resolve_ticker_for_symbol("EUR/USD")
+        self.assertEqual(fx_ticker, "XEON_EQ")
+        self.assertIn("Forex/Macro signal", fx_note)
+
+        # Verify Trading 212 AutoInvest Pie payload sums to 1.0000
+        assert engine.latest_advice is not None
+        pie = engine.t212_client.build_pie_allocation_payload(engine.latest_advice)
+        self.assertAlmostEqual(sum(pie["instrumentShares"].values()), 1.0, places=4)
+
+        # Verify real account cash scaling prevents InsufficientFunds on smaller accounts (e.g. 500 EUR)
+        sig = engine.latest_advice.actionable_signals[0]
+        dec = engine.latest_decisions[0]
+        scaled_receipt = engine.t212_client.execute_risk_approved_signal(
+            signal=sig,
+            decision=dec,
+            reference_price=100.0,
+            account_free_cash=120.0,
+            account_total_equity=500.0,
+            dry_run_if_unconfigured=True,
+        )
+        self.assertLessEqual(scaled_receipt.notional_account_ccy, 120.0 * 0.95)
+        self.assertGreater(scaled_receipt.quantity, 0.0)
+
+        # Verify Key+Secret Basic auth header encoding
+        basic_client = Trading212BrokerClient(api_key="my_id", api_secret="my_secret")
+        self.assertTrue(basic_client.build_auth_header().startswith("Basic "))
 
         # Live environment must block real-money orders unless AEGIS_ALLOW_LIVE_TRADING is explicitly set
         live_client = Trading212BrokerClient(
