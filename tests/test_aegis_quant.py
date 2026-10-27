@@ -265,6 +265,30 @@ class TestAegisQuant(unittest.TestCase):
             httpd.server_close()
             engine.storage.close()
 
+    def test_trading212_broker_client_and_autonomous_daemon(self) -> None:
+        from aegis_quant.brokers import BrokerEnvironment, Trading212BrokerClient
+
+        engine = AutonomousQuantEngine(db_path=":memory:", seed=42)
+        res = engine.step_cycle(prefer_live_feeds=False, route_to_trading212=True)
+        self.assertIn("trading212_receipts", res)
+        self.assertGreater(len(res["trading212_receipts"]), 0)
+        first_receipt = res["trading212_receipts"][0]
+        self.assertEqual(first_receipt["status"], "DRY_RUN_READY")
+        self.assertTrue(first_receipt["broker_ticker"].endswith("_US_EQ"))
+
+        # Live environment must block real-money orders unless AEGIS_ALLOW_LIVE_TRADING is explicitly set
+        live_client = Trading212BrokerClient(
+            api_key="test-key",
+            environment=BrokerEnvironment.TRADING212_LIVE,
+        )
+        with self.assertRaises(PermissionError):
+            live_client.place_market_order("MSFT_US_EQ", 1.5)
+
+        # CLI t212-sync and daemon smoke test
+        self.assertEqual(cli_main(["t212-sync", "--env", "demo", "--json"]), 0)
+        self.assertEqual(cli_main(["daemon", "--interval", "0.05", "--max-cycles", "2", "--t212", "--json"]), 0)
+        engine.storage.close()
+
 
 if __name__ == "__main__":
     unittest.main()

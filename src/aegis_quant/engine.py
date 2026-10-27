@@ -5,6 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from aegis_quant.brokers import BrokerEnvironment, ExternalOrderReceipt, Trading212BrokerClient
+from aegis_quant.live_feeds import LiveMarketAndNewsCollector
 from aegis_quant.models import (
     DEFAULT_UNIVERSE,
     AllocationAdvice,
@@ -48,13 +50,35 @@ class AutonomousQuantEngine:
             universe=self.universe,
         )
         self.learner = SelfLearningController(storage=self.storage)
+        self.live_collector = LiveMarketAndNewsCollector(
+            news_engine=self.news_engine,
+            simulator=self.simulator,
+            universe=self.universe,
+        )
+        self.t212_client = Trading212BrokerClient(
+            environment=BrokerEnvironment.TRADING212_DEMO
+        )
         self.latest_bars: dict[str, MarketBar] = {}
         self.latest_advice: AllocationAdvice | None = None
         self.latest_decisions: list[RiskDecision] = []
+        self.latest_t212_receipts: list[ExternalOrderReceipt] = []
 
-    def step_cycle(self) -> dict[str, Any]:
+    def step_cycle(
+        self,
+        prefer_live_feeds: bool = False,
+        route_to_trading212: bool = False,
+    ) -> dict[str, Any]:
         """Run one complete autonomous perception -> exit -> post-mortem -> allocation -> risk -> trade cycle."""
-        ts, true_regime, bars, raw_news = self.simulator.next_tick()
+        if prefer_live_feeds:
+            tick = self.live_collector.collect_tick(prefer_live=True)
+            ts = tick["timestamp"]
+            true_regime = self.simulator.current_regime()
+            bars = tick["bars"]
+            raw_news = tick["news_events"]
+            feed_mode = tick["mode"]
+        else:
+            ts, true_regime, bars, raw_news = self.simulator.next_tick()
+            feed_mode = "SIMULATED"
         self.latest_bars = bars
 
         # 1. Ingest and verify incoming world news
@@ -96,10 +120,11 @@ class AutonomousQuantEngine:
         )
         self.latest_advice = advice
 
-        # 5. Evaluate top actionable signals through IndependentRiskGuard & execute in PaperBroker
+        # 5. Evaluate top actionable signals through IndependentRiskGuard & execute in PaperBroker (+ optional Trading 212)
         portfolio = self.broker.compute_portfolio_summary()
         decisions: list[RiskDecision] = []
         opened_positions = []
+        t212_receipts: list[ExternalOrderReceipt] = []
 
         for sig in advice.actionable_signals[:3]:
             bar = bars[sig.symbol]
@@ -127,8 +152,17 @@ class AutonomousQuantEngine:
                 )
                 if pos is not None:
                     opened_positions.append(pos.to_dict())
+                if route_to_trading212:
+                    receipt = self.t212_client.execute_risk_approved_signal(
+                        signal=sig,
+                        decision=decision,
+                        reference_price=bar.mid_price,
+                        dry_run_if_unconfigured=True,
+                    )
+                    t212_receipts.append(receipt)
 
         self.latest_decisions = decisions
+        self.latest_t212_receipts = t212_receipts
         final_portfolio = self.broker.compute_portfolio_summary()
         self.storage.record_equity_point(
             timestamp=ts,
@@ -140,6 +174,7 @@ class AutonomousQuantEngine:
 
         return {
             "timestamp": ts,
+            "feed_mode": feed_mode,
             "simulated_regime": true_regime.value,
             "detected_regime": advice.regime.value,
             "news_ingestion": {
@@ -151,6 +186,7 @@ class AutonomousQuantEngine:
             "closed_trades": [t.to_dict() for t in closed_trades],
             "new_postmortems": new_postmortems,
             "opened_positions": opened_positions,
+            "trading212_receipts": [r.to_dict() for r in t212_receipts],
             "risk_decisions": [d.to_dict() for d in decisions],
             "allocation_advice": advice.to_dict(),
             "portfolio": final_portfolio,

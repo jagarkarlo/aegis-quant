@@ -124,6 +124,29 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_hl.add_argument("--json", action="store_true", help="Emit JSON output")
 
+    p_t212 = sub.add_parser(
+        "t212-sync",
+        help="Run autonomous cycle and route approved Equity/ETF orders to Trading 212 Demo/Live API.",
+    )
+    p_t212.add_argument(
+        "--env",
+        choices=["demo", "live"],
+        default="demo",
+        help="Trading 212 environment: demo (https://demo.trading212.com) or live",
+    )
+    p_t212.add_argument("--live-feeds", action="store_true", help="Attempt live market & RSS feeds")
+    p_t212.add_argument("--json", action="store_true", help="Emit JSON output")
+
+    p_dmn = sub.add_parser(
+        "daemon",
+        help="Run continuous self-managing autonomous loop (news + quotes + risk guard + Trading 212 / paper execution + self-learning).",
+    )
+    p_dmn.add_argument("--interval", type=float, default=15.0, help="Seconds between autonomous cycles")
+    p_dmn.add_argument("--max-cycles", type=int, default=5, help="Max cycles to run (0 = infinite 24/7 loop)")
+    p_dmn.add_argument("--live-feeds", action="store_true", help="Use live RSS & market quote feeds with fallback")
+    p_dmn.add_argument("--t212", action="store_true", help="Route approved Equity/ETF orders to Trading 212")
+    p_dmn.add_argument("--json", action="store_true", help="Emit JSON summary")
+
     p_srv = sub.add_parser(
         "serve",
         help="Launch the interactive Web Control Center & REST API server.",
@@ -201,6 +224,62 @@ def main(argv: list[str] | None = None) -> int:
                     "rumors_flagged": ing["rumors_flagged"],
                     "contradictions_detected": ing["contradictions_detected"],
                 },
+            },
+            as_json=args.json,
+        )
+        return 0
+
+    if args.command == "t212-sync":
+        from aegis_quant.brokers import BrokerEnvironment
+
+        engine.t212_client.environment = (
+            BrokerEnvironment.TRADING212_LIVE
+            if args.env == "live"
+            else BrokerEnvironment.TRADING212_DEMO
+        )
+        res = engine.step_cycle(
+            prefer_live_feeds=args.live_feeds,
+            route_to_trading212=True,
+        )
+        _print_output(
+            {
+                "trading212_environment": engine.t212_client.environment.value,
+                "trading212_base_url": engine.t212_client.base_url,
+                "api_key_configured": engine.t212_client.is_configured(),
+                "feed_mode": res["feed_mode"],
+                "detected_regime": res["detected_regime"],
+                "primary_verdict": res["allocation_advice"]["primary_verdict"],
+                "trading212_order_receipts": res["trading212_receipts"],
+                "portfolio": res["portfolio"],
+            },
+            as_json=args.json,
+        )
+        return 0
+
+    if args.command == "daemon":
+        import time
+
+        target_cycles = args.max_cycles
+        completed = 0
+        last_res: dict[str, Any] = {}
+        while target_cycles == 0 or completed < target_cycles:
+            last_res = engine.step_cycle(
+                prefer_live_feeds=args.live_feeds,
+                route_to_trading212=args.t212,
+            )
+            completed += 1
+            if target_cycles == 0 or completed < target_cycles:
+                time.sleep(max(0.05, args.interval))
+
+        _print_output(
+            {
+                "daemon_cycles_completed": completed,
+                "feed_mode": last_res.get("feed_mode", "SIMULATED"),
+                "latest_regime": last_res.get("detected_regime"),
+                "latest_verdict": last_res.get("allocation_advice", {}).get("primary_verdict"),
+                "trading212_receipts": last_res.get("trading212_receipts", []),
+                "portfolio": last_res.get("portfolio"),
+                "learning_summary": engine.learner.build_learning_summary(),
             },
             as_json=args.json,
         )

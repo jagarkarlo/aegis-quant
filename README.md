@@ -89,9 +89,17 @@ PYTHONPATH=src python3 -m aegis_quant.cli backtest --bars 90
 PYTHONPATH=src python3 -m aegis_quant.cli ingest-headline \
   "Federal Reserve signals dovish rate cut as core inflation cools" --tier 1
 
-# 6. Launch the Interactive Web Control Center & REST API
+# 6. Sync with Trading 212 Practice/Demo API (or preview exact payloads in dry-run mode)
+PYTHONPATH=src python3 -m aegis_quant.cli t212-sync --env demo --live-feeds
+
+# 7. Run the 24/7 Autonomous Self-Managing Daemon (persistent SQLite memory + live feeds + T212)
+PYTHONPATH=src python3 -m aegis_quant.cli --db aegis_state.db daemon --interval 30 --max-cycles 5 --live-feeds --t212
+
+# 8. Launch the Interactive Web Control Center & REST API
 PYTHONPATH=src python3 -m aegis_quant.cli serve --host 127.0.0.1 --port 8765
 ```
+
+See [docs/TRADING212_INTEGRATION.md](./docs/TRADING212_INTEGRATION.md) for the complete Trading 212 API setup guide, endpoint reference, EU/UK UCITS ticker mapping, and safety gates.
 
 ---
 
